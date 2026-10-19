@@ -1,0 +1,745 @@
+/* ==========================================================================
+   Painel de Candidaturas
+   Layout: um número grande (candidaturas enviadas) acima de uma lista de
+   trabalho; o detalhe da vaga abre num painel lateral.
+
+   Índice
+   1. Cores e fontes (tema claro / escuro)
+   2. Base
+   3. Botões
+   4. Cabeçalho
+   5. Placar
+   6. Busca e filtros
+   7. Lista de candidaturas
+   8. Painel lateral e formulário
+   9. Aviso rápido (toast)
+   10. Telas pequenas e animação
+   ========================================================================== */
+
+
+/* 1. Cores e fontes ------------------------------------------------------- */
+
+:root {
+  /* superfícies e texto */
+  --bg: #EDF0F3;
+  --surface: #FFFFFF;
+  --surface-2: #F5F7F9;
+  --ink: #13202C;
+  --muted: #586878;
+  --line: #D6DDE4;
+
+  /* destaque e estados */
+  --accent: #0B6B63;
+  --accent-ink: #FFFFFF;
+  --focus: #1A6FE0;
+  --danger: #B42332;
+  --shadow: rgba(19, 32, 44, .18);
+
+  /* cor de cada status */
+  --s-sent: #586878;
+  --s-review: #8F5E00;
+  --s-interview: #5744BF;
+  --s-offer: #1B7A38;
+  --s-hired: #0B6B63;
+  --s-rejected: #B42332;
+  --s-ghost: #7A8794;
+
+  /* fontes */
+  --font-body: 'Schibsted Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-data: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Tema escuro automático (segue o sistema, a menos que o tema claro esteja forçado) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E151B;
+    --surface: #16202A;
+    --surface-2: #1C2833;
+    --ink: #E6ECF1;
+    --muted: #97A6B4;
+    --line: #2A3846;
+
+    --accent: #47C9BC;
+    --accent-ink: #06211E;
+    --focus: #6CA8FF;
+    --danger: #FF7B88;
+    --shadow: rgba(0, 0, 0, .6);
+
+    --s-sent: #97A6B4;
+    --s-review: #E8B24A;
+    --s-interview: #A99BFF;
+    --s-offer: #5CD184;
+    --s-hired: #47C9BC;
+    --s-rejected: #FF7B88;
+    --s-ghost: #7F8E9C;
+
+    color-scheme: dark;
+  }
+}
+
+/* Tema escuro forçado (mesmos valores do bloco acima) */
+:root[data-theme="dark"] {
+  --bg: #0E151B;
+  --surface: #16202A;
+  --surface-2: #1C2833;
+  --ink: #E6ECF1;
+  --muted: #97A6B4;
+  --line: #2A3846;
+
+  --accent: #47C9BC;
+  --accent-ink: #06211E;
+  --focus: #6CA8FF;
+  --danger: #FF7B88;
+  --shadow: rgba(0, 0, 0, .6);
+
+  --s-sent: #97A6B4;
+  --s-review: #E8B24A;
+  --s-interview: #A99BFF;
+  --s-offer: #5CD184;
+  --s-hired: #47C9BC;
+  --s-rejected: #FF7B88;
+  --s-ghost: #7F8E9C;
+
+  color-scheme: dark;
+}
+
+
+/* 2. Base ----------------------------------------------------------------- */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.45;
+  padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+.wrap {
+  max-width: 1040px;
+  margin: 0 auto;
+  display: grid;
+  gap: 20px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* Números e datas em fonte monoespaçada, alinhados em coluna */
+.mono {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Campos de formulário (usados na busca e no painel lateral) */
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 11px;
+  min-height: 40px;
+  width: 100%;
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+textarea.tall {
+  min-height: 140px;
+}
+
+
+/* 3. Botões --------------------------------------------------------------- */
+
+.btn {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: 9px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  min-height: 40px;
+}
+
+.btn:hover {
+  border-color: var(--muted);
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+.btn.primary:hover {
+  filter: brightness(1.08);
+}
+
+.btn.danger {
+  color: var(--danger);
+}
+
+.btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+
+/* 4. Cabeçalho ------------------------------------------------------------ */
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.top h1 {
+  margin: 0;
+  font-size: clamp(22px, 4vw, 30px);
+  letter-spacing: -.01em;
+  font-weight: 700;
+  text-wrap: balance;
+}
+
+.top p {
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+
+.top-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+
+/* 5. Placar --------------------------------------------------------------- */
+
+.score {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 22px;
+  display: grid;
+  gap: 20px;
+}
+
+/* número grande + legenda ao lado */
+.score-main {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px 32px;
+  align-items: end;
+}
+
+.big {
+  font-family: var(--font-data);
+  font-weight: 500;
+  font-size: clamp(56px, 12vw, 92px);
+  line-height: .9;
+  letter-spacing: -.03em;
+  color: var(--accent);
+}
+
+.big-label {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.big-sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+/* quatro indicadores menores */
+.mini {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mini div {
+  min-width: 0;
+  border-left: 2px solid var(--line);
+  padding-left: 12px;
+}
+
+.mini b {
+  display: block;
+  font-family: var(--font-data);
+  font-weight: 500;
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.mini span {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* barra de distribuição por status + legenda (a cor vem de --c, definida pelo JS) */
+.bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface-2);
+  gap: 2px;
+}
+
+.bar i {
+  display: block;
+  min-width: 4px;
+  background: var(--c);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.legend span::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--c);
+  margin-right: 6px;
+}
+
+/* "Início da busca" (com edição inline da data) */
+.start {
+  font-size: 12.5px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.start button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.start label {
+  display: inline;
+}
+
+.start input {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  width: auto;
+  min-height: 32px;
+}
+
+/* faixa de destaque quando alguma vaga foi conquistada */
+.hired {
+  border: 1px solid var(--s-hired);
+  background: color-mix(in srgb, var(--s-hired) 12%, var(--surface));
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-weight: 600;
+}
+
+
+/* 6. Busca e filtros ------------------------------------------------------ */
+
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.tools input[type=search] {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.chip[aria-pressed=true] {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: var(--ink);
+}
+
+.chip small {
+  font-family: var(--font-data);
+  opacity: .75;
+}
+
+
+/* 7. Lista de candidaturas ------------------------------------------------ */
+
+.list {
+  display: grid;
+  gap: 8px;
+}
+
+/* cabeçalho e linhas compartilham as mesmas colunas */
+.head,
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) 104px minmax(0, 1.5fr) 150px 74px;
+  gap: 14px;
+  align-items: center;
+}
+
+.head {
+  padding: 0 16px;
+  font-size: 11.5px;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.row {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+
+.row:hover {
+  border-color: var(--muted);
+}
+
+/* empresa + cargo + link */
+.co {
+  min-width: 0;
+}
+
+.co b {
+  display: block;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.co span {
+  color: var(--muted);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.co a {
+  color: var(--accent);
+  font-size: 12.5px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.tag {
+  display: inline-block;
+  font-family: var(--font-data);
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: 8px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.date {
+  font-size: 13px;
+}
+
+.cv {
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* seletor de status em formato de "pílula" colorida (cor vem de --c) */
+.pill {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid color-mix(in srgb, var(--c) 40%, transparent);
+  background: color-mix(in srgb, var(--c) 13%, var(--surface));
+  color: var(--c);
+  font-weight: 600;
+  font-size: 13px;
+  border-radius: 999px;
+  padding: 5px 26px 5px 12px;
+  min-height: 32px;
+  width: 100%;
+  cursor: pointer;
+
+  /* setinha desenhada com dois gradientes */
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.pill option {
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.open {
+  justify-self: end;
+}
+
+/* estados vazios e avisos */
+.empty {
+  background: var(--surface);
+  border: 1px dashed var(--muted);
+  border-radius: 12px;
+  padding: 32px 24px;
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.empty h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.empty ol {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+  display: grid;
+  gap: 4px;
+}
+
+.notice {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 10px;
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+
+/* 8. Painel lateral e formulário ------------------------------------------ */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--shadow);
+  z-index: 20;
+}
+
+.panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(560px, 100%);
+  background: var(--surface);
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -12px 0 40px var(--shadow);
+}
+
+.panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  padding-top: max(16px, env(safe-area-inset-top, 0px));
+  border-bottom: 1px solid var(--line);
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.panel form {
+  overflow: auto;
+  padding: 18px 20px;
+  display: grid;
+  gap: 14px;
+  flex: 1;
+  align-content: start;
+}
+
+.panel footer {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px 20px;
+  padding-bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
+  border-top: 1px solid var(--line);
+}
+
+.panel footer .grow {
+  flex: 1;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.grid2 > * {
+  min-width: 0;
+}
+
+label {
+  display: grid;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+label small {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+fieldset {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  min-width: 0;
+}
+
+legend {
+  font-size: 12px;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 6px;
+}
+
+
+/* 9. Aviso rápido (toast) ------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: max(20px, env(safe-area-inset-bottom, 0px));
+  background: var(--ink);
+  color: var(--bg);
+  padding: 10px 16px;
+  border-radius: 8px;
+  z-index: 30;
+  font-size: 14px;
+  max-width: calc(100% - 32px);
+}
+
+
+/* 10. Telas pequenas e animação ------------------------------------------- */
+
+@media (max-width: 760px) {
+  .head {
+    display: none;
+  }
+
+  /* cada candidatura vira um cartão com áreas nomeadas */
+  .row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "co open"
+      "date date"
+      "cv cv"
+      "st st";
+    gap: 8px 12px;
+  }
+
+  .row .co   { grid-area: co; }
+  .row .date { grid-area: date; }
+  .row .cv   { grid-area: cv; }
+  .row .stw  { grid-area: st; }
+  .row .open { grid-area: open; }
+
+  .score-main {
+    grid-template-columns: 1fr;
+  }
+
+  .mini {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .panel {
+    animation: slide-in .18s ease-out;
+  }
+
+  @keyframes slide-in {
+    from {
+      transform: translateX(24px);
+      opacity: 0;
+    }
+  }
+}

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Painel de Candidaturas</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+  <!-- ============ Página principal ============ -->
+  <div class="wrap">
+
+    <header class="top">
+      <div>
+        <h1>Painel de Candidaturas</h1>
+        <p>Cada vaga enviada, o CV usado e o que aconteceu na entrevista.</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn" id="csv" type="button">Exportar CSV</button>
+        <button class="btn primary" id="new" type="button">+ Nova candidatura</button>
+      </div>
+    </header>
+
+    <div id="notice" hidden></div>
+    <div id="hired" class="hired" hidden></div>
+
+    <!-- Placar: número grande + indicadores + barra por status -->
+    <section class="score" aria-label="Resumo">
+      <div class="score-main">
+        <div class="big" id="total">0</div>
+        <div>
+          <div class="big-label">candidaturas enviadas</div>
+          <div class="big-sub" id="sub">&nbsp;</div>
+        </div>
+      </div>
+
+      <div class="mini">
+        <div><b id="m-days">0</b><span>dias de busca</span></div>
+        <div><b id="m-active">0</b><span>em andamento</span></div>
+        <div><b id="m-int">0</b><span>com entrevista</span></div>
+        <div><b id="m-rate">0%</b><span>taxa de resposta</span></div>
+      </div>
+
+      <div class="bar" id="bar" role="img" aria-label="Distribuição por status"></div>
+      <div class="legend" id="legend"></div>
+      <div class="start" id="start"></div>
+    </section>
+
+    <!-- Busca e filtros -->
+    <div class="tools">
+      <input type="search" id="q" placeholder="Buscar por empresa, cargo ou CV" aria-label="Buscar candidaturas">
+    </div>
+    <div class="chips" id="chips"></div>
+
+    <!-- Lista de candidaturas (montada pelo app.js) -->
+    <div class="list" id="list"></div>
+  </div>
+
+
+  <!-- ============ Painel lateral: nova candidatura / detalhe da vaga ============ -->
+  <div id="overlay" hidden>
+    <div class="scrim" id="scrim"></div>
+
+    <div class="panel" role="dialog" aria-modal="true" aria-labelledby="ptitle">
+      <header>
+        <h2 id="ptitle">Nova candidatura</h2>
+        <button class="btn" type="button" id="close" aria-label="Fechar painel">Fechar</button>
+      </header>
+
+      <form id="form" autocomplete="off">
+
+        <div class="grid2">
+          <label>Empresa
+            <input id="f-company" required>
+          </label>
+          <label>Cargo
+            <input id="f-role" placeholder="Ex.: Desenvolvedor Front-end">
+          </label>
+        </div>
+
+        <label>Link da vaga
+          <input id="f-url" type="text" inputmode="url" placeholder="https://">
+        </label>
+
+        <div class="grid2">
+          <label>Enviada em
+            <input id="f-sent" type="date" required>
+          </label>
+          <label>Origem
+            <select id="f-source">
+              <option value="">Não informada</option>
+              <option>LinkedIn</option>
+              <option>Gupy</option>
+              <option>Indeed</option>
+              <option>Site da empresa</option>
+              <option>Indicação</option>
+              <option>Outra</option>
+            </select>
+          </label>
+        </div>
+
+        <label>CV enviado <small>nome do arquivo ou versão</small>
+          <input id="f-cv" list="cvlist" placeholder="Ex.: MEU_CV.pdf">
+          <datalist id="cvlist"></datalist>
+        </label>
+
+        <label>Status
+          <select id="f-status"></select>
+        </label>
+
+        <label>Observações da vaga <small>requisitos, salário, contato do recrutador</small>
+          <textarea id="f-notes"></textarea>
+        </label>
+
+        <fieldset>
+          <legend>Entrevista</legend>
+
+          <div class="grid2">
+            <label>Data
+              <input id="f-idate" type="date">
+            </label>
+            <label>Etapa
+              <select id="f-istage">
+                <option value="">Não definida</option>
+                <option>Triagem com RH</option>
+                <option>Entrevista técnica</option>
+                <option>Teste ou desafio</option>
+                <option>Entrevista com gestor</option>
+                <option>Etapa final</option>
+              </select>
+            </label>
+          </div>
+
+          <label>Observações da entrevista <small>perguntas feitas, o que foi bem, o que reforçar</small>
+            <textarea id="f-inotes" class="tall"></textarea>
+          </label>
+        </fieldset>
+
+      </form>
+
+      <footer>
+        <button class="btn primary" type="submit" form="form" id="save">Salvar</button>
+        <button class="btn" type="button" id="cancel">Cancelar</button>
+        <span class="grow"></span>
+        <button class="btn danger" type="button" id="del" hidden>Excluir</button>
+      </footer>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
