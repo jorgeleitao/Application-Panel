@@ -511,6 +511,10 @@ textarea.tall {
   overflow-wrap: anywhere;
 }
 
+.cv a {
+  color: var(--accent);
+}
+
 /* seletor de status em formato de "pílula" colorida (cor vem de --c) */
 .pill {
   appearance: none;
@@ -674,6 +678,22 @@ legend {
   text-transform: uppercase;
   color: var(--muted);
   padding: 0 6px;
+}
+
+
+/* campo de CV: nome do arquivo + botão para escolher no computador */
+.file-pick {
+  display: flex;
+  gap: 8px;
+}
+
+.file-pick #f-cv {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-pick .btn {
+  white-space: nowrap;
 }
 
 

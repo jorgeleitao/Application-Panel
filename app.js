@@ -9,7 +9,7 @@
     {k:'semresposta',l:'Sem resposta',c:'--s-ghost'}
   ];
   var ACTIVE=['enviada','analise','entrevista','proposta'];
-  var DEFAULT_CVS=['MEU_CV.pdf'];
+  var cvFiles=[]; // CVs já enviados (ficam na pasta cvs/ ao lado do data.json)
   var $=function(s){return document.querySelector(s)};
   var apps=[], settings={}, loaded=false, ready=true, filter='all', query='', editingId=null, delArmed=false, delTimer=null, toastTimer=null;
   var queue=Promise.resolve();
@@ -107,21 +107,42 @@
         +(u?'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(host(u))+' ↗</a>':'')
         +(a.interviewNotes?'<span class="tag">notas de entrevista</span>':'')+'</div>'
         +'<div class="date mono">'+fmt(a.sentAt)+'</div>'
-        +'<div class="cv mono">'+esc(a.cv||'—')+'</div>'
+        +'<div class="cv mono">'+cvCell(a.cv)+'</div>'
         +'<div class="stw"><select class="pill" style="--c:var('+s.c+')" data-status-for="'+esc(a.id)+'" aria-label="Status de '+esc(a.company)+'">'+opts+'</select></div>'
         +'<button class="btn open" type="button" data-open="'+esc(a.id)+'">Abrir</button></div>';
     });
     el.innerHTML=html;
   }
+  // Se o CV foi enviado pelo painel, o nome vira um link que abre o arquivo.
+  function cvCell(name){
+    if(!name)return '—';
+    if(cvFiles.indexOf(name)<0)return esc(name);
+    return '<a href="/cvs/'+encodeURIComponent(name)+'" target="_blank" rel="noopener">'+esc(name)+'</a>';
+  }
   function renderCvList(){
     var seen={},out=[];
-    DEFAULT_CVS.concat(apps.map(function(a){return a.cv})).forEach(function(v){v=(v||'').trim();if(v&&!seen[v]){seen[v]=1;out.push(v)}});
+    cvFiles.concat(apps.map(function(a){return a.cv})).forEach(function(v){v=(v||'').trim();if(v&&!seen[v]){seen[v]=1;out.push(v)}});
     $('#cvlist').innerHTML=out.map(function(v){return '<option value="'+esc(v)+'"></option>'}).join('');
+  }
+
+  /* CV: escolher o arquivo no computador e guardar junto com os dados */
+  function uploadCv(file){
+    if(!file)return;
+    fetch('/api/cv?name='+encodeURIComponent(file.name),{method:'PUT',body:file})
+      .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
+      .then(function(d){
+        if(cvFiles.indexOf(d.name)<0)cvFiles.push(d.name);
+        $('#f-cv').value=d.name;
+        renderCvList();
+        toast('CV adicionado: '+d.name);
+      })
+      .catch(function(){toast('Não foi possível enviar o arquivo. Use PDF, DOC, DOCX ou ODT de até 10 MB.')})
+      .then(function(){$('#cv-file').value=''});
   }
 
   /* Painel */
   function fillStatusSelect(){$('#f-status').innerHTML=STATUSES.map(function(s){return '<option value="'+s.k+'">'+esc(s.l)+'</option>'}).join('')}
-  function lastCv(){var m=apps.slice().sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0)})[0];return (m&&m.cv)||DEFAULT_CVS[0]}
+  function lastCv(){var m=apps.slice().sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0)})[0];return (m&&m.cv)||''}
   function openPanel(id){
     editingId=id||null;delArmed=false;$('#del').textContent='Excluir';
     var a=id?apps.filter(function(x){return x.id===id})[0]:null;
@@ -202,6 +223,8 @@
 
   /* Eventos */
   $('#csv').addEventListener('click',exportCsv);
+  $('#cv-browse').addEventListener('click',function(){$('#cv-file').click()});
+  $('#cv-file').addEventListener('change',function(e){uploadCv(e.target.files[0])});
   $('#new').addEventListener('click',function(){openPanel(null)});
   $('#close').addEventListener('click',closePanel);
   $('#cancel').addEventListener('click',closePanel);
@@ -224,6 +247,7 @@
 
   /* Armazenamento: arquivo data.json ao lado do server.js */
   fillStatusSelect();render();
+  fetch('/api/cvs').then(function(r){return r.ok?r.json():[]}).catch(function(){return []}).then(function(list){cvFiles=list;render()});
   fetch('/api/data').then(function(r){if(!r.ok)throw new Error();return r.json()}).then(function(d){
     apps=Array.isArray(d.apps)?d.apps:[];settings=d.settings||{};loaded=true;render();
   }).catch(function(){

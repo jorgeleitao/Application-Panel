@@ -101,8 +101,12 @@
           </label>
         </div>
 
-        <label>CV enviado <small>nome do arquivo ou versão</small>
-          <input id="f-cv" list="cvlist" placeholder="Ex.: MEU_CV.pdf">
+        <label>CV enviado <small>escolha o arquivo no seu computador (PDF, DOC, DOCX ou ODT)</small>
+          <div class="file-pick">
+            <input id="f-cv" list="cvlist" placeholder="Nenhum arquivo escolhido">
+            <button class="btn" type="button" id="cv-browse">Escolher arquivo…</button>
+            <input id="cv-file" type="file" accept=".pdf,.doc,.docx,.odt" hidden>
+          </div>
           <datalist id="cvlist"></datalist>
         </label>
 
