@@ -1,258 +1,600 @@
-(function(){
-  var STATUSES=[
-    {k:'enviada',l:'Enviada',c:'--s-sent'},
-    {k:'analise',l:'Em análise',c:'--s-review'},
-    {k:'entrevista',l:'Entrevista',c:'--s-interview'},
-    {k:'proposta',l:'Proposta',c:'--s-offer'},
-    {k:'contratado',l:'Contratado',c:'--s-hired'},
-    {k:'recusada',l:'Recusada',c:'--s-rejected'},
-    {k:'semresposta',l:'Sem resposta',c:'--s-ghost'}
+// Painel de Candidaturas: lógica da tela.
+// O servidor (server.js) guarda os dados em data.json e os CVs na pasta cvs/.
+
+(() => {
+  /* ---------- Configuração ---------- */
+
+  const STATUSES = [
+    { key: 'enviada',     label: 'Enviada',      color: '--s-sent' },
+    { key: 'analise',     label: 'Em análise',   color: '--s-review' },
+    { key: 'entrevista',  label: 'Entrevista',   color: '--s-interview' },
+    { key: 'proposta',    label: 'Proposta',     color: '--s-offer' },
+    { key: 'contratado',  label: 'Contratado',   color: '--s-hired' },
+    { key: 'recusada',    label: 'Recusada',     color: '--s-rejected' },
+    { key: 'semresposta', label: 'Sem resposta', color: '--s-ghost' },
   ];
-  var ACTIVE=['enviada','analise','entrevista','proposta'];
-  var cvFiles=[]; // CVs já enviados (ficam na pasta cvs/ ao lado do data.json)
-  var $=function(s){return document.querySelector(s)};
-  var apps=[], settings={}, loaded=false, ready=true, filter='all', query='', editingId=null, delArmed=false, delTimer=null, toastTimer=null;
-  var queue=Promise.resolve();
-  function newId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
-  function persist(){
-    return enqueue(function(){
-      return fetch('/api/data',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({apps:apps,settings:settings})}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status)});
-    });
+
+  const ACTIVE_STATUSES = ['enviada', 'analise', 'entrevista', 'proposta']; // ainda sem desfecho
+  const INTERVIEW_STATUSES = ['entrevista', 'proposta', 'contratado'];      // contam como "chegou numa entrevista"
+
+  const TOAST_MS = 3200;
+  const CONFIRM_DELETE_MS = 4000;
+
+  // Campo do formulário -> nome do campo na candidatura.
+  const FORM_FIELDS = {
+    company: '#f-company',
+    role: '#f-role',
+    url: '#f-url',
+    sentAt: '#f-sent',
+    source: '#f-source',
+    cv: '#f-cv',
+    status: '#f-status',
+    notes: '#f-notes',
+    interviewAt: '#f-idate',
+    interviewStage: '#f-istage',
+    interviewNotes: '#f-inotes',
+  };
+
+  const CSV_COLUMNS = [
+    ['company', 'Empresa'],
+    ['role', 'Cargo'],
+    ['url', 'Link'],
+    ['sentAt', 'Enviada em'],
+    ['source', 'Origem'],
+    ['cv', 'CV enviado'],
+    ['status', 'Status'],
+    ['notes', 'Observações'],
+    ['interviewAt', 'Data da entrevista'],
+    ['interviewStage', 'Etapa'],
+    ['interviewNotes', 'Obs. da entrevista'],
+  ];
+
+  /* ---------- Estado ---------- */
+
+  let apps = [];
+  let settings = {};          // por enquanto só { startedAt }
+  let cvFiles = [];           // CVs já guardados na pasta cvs/
+  let isLoaded = false;
+  let activeFilter = 'all';
+  let searchText = '';
+  let editingId = null;
+  let deleteArmed = false;
+  let deleteTimer = null;
+  let toastTimer = null;
+  let saveQueue = Promise.resolve();
+
+  const $ = (selector) => document.querySelector(selector);
+
+  /* ---------- Texto, datas e links ---------- */
+
+  function escapeHtml(value) {
+    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    return String(value ?? '').replace(/[&<>"']/g, (char) => map[char]);
   }
 
-  function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-  function pad(n){return n<10?'0'+n:''+n}
-  function todayStr(){var d=new Date();return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())}
-  function toDate(s){var p=String(s||'').split('-');return p.length===3?new Date(+p[0],+p[1]-1,+p[2]):null}
-  function fmt(s){var p=String(s||'').split('-');return p.length===3?p[2]+'/'+p[1]+'/'+p[0]:'—'}
-  function daysBetween(a,b){var x=toDate(a),y=toDate(b);if(!x||!y)return 0;return Math.max(0,Math.round((y-x)/86400000))}
-  function stat(k){for(var i=0;i<STATUSES.length;i++)if(STATUSES[i].k===k)return STATUSES[i];return STATUSES[0]}
-  function host(u){try{return new URL(u).hostname.replace(/^www\./,'')}catch(e){return 'link'}}
-  function safeUrl(u){u=String(u||'').trim();if(!u)return '';if(!/^https?:\/\//i.test(u))u='https://'+u;try{var x=new URL(u);return (x.protocol==='http:'||x.protocol==='https:')?x.href:''}catch(e){return ''}}
-  function toast(msg){var t=$('#toast');t.textContent=msg;t.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.hidden=true},3200)}
-  function enqueue(fn){queue=queue.then(fn,fn);return queue}
+  function newId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  }
 
-  function startDate(){
-    if(settings.startedAt)return settings.startedAt;
-    var min='';apps.forEach(function(a){if(a.sentAt&&(!min||a.sentAt<min))min=a.sentAt});
-    return min||todayStr();
+  // As datas são guardadas como "AAAA-MM-DD", sem horário, para não sofrer com fuso.
+  function todayStr() {
+    const now = new Date();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${now.getFullYear()}-${month}-${day}`;
   }
-  function hasInterview(a){return !!(a.interviewAt||a.interviewNotes||['entrevista','proposta','contratado'].indexOf(a.status)>-1)}
 
-  function render(){
-    renderStats();renderChips();renderList();renderCvList();
+  function parseDate(text) {
+    const [year, month, day] = String(text || '').split('-').map(Number);
+    return year && month && day ? new Date(year, month - 1, day) : null;
   }
-  function renderStats(){
-    var n=apps.length,start=startDate(),days=daysBetween(start,todayStr());
-    var active=apps.filter(function(a){return ACTIVE.indexOf(a.status)>-1}).length;
-    var inter=apps.filter(hasInterview).length;
-    var answered=apps.filter(function(a){return a.status!=='enviada'&&a.status!=='semresposta'}).length;
-    var rate=n?Math.round(answered/n*100):0;
-    $('#total').textContent=n;
-    $('#m-days').textContent=days;$('#m-active').textContent=active;$('#m-int').textContent=inter;$('#m-rate').textContent=rate+'%';
-    $('#sub').textContent=n?('desde '+fmt(start)):'Registre a primeira para começar a contar';
-    var bar='',leg='';
-    STATUSES.forEach(function(s){
-      var c=apps.filter(function(a){return a.status===s.k}).length;
-      if(!c)return;
-      bar+='<i style="--c:var('+s.c+');flex:'+c+'" title="'+esc(s.l)+': '+c+'"></i>';
-      leg+='<span style="--c:var('+s.c+')">'+esc(s.l)+' <b class="mono">'+c+'</b></span>';
-    });
-    $('#bar').innerHTML=bar;$('#bar').hidden=!n;$('#legend').innerHTML=leg;
-    var st=$('#start');
-    st.innerHTML='<span>Início da busca: <b class="mono">'+fmt(start)+'</b></span><button type="button" id="chg">alterar</button>';
-    var hired=apps.filter(function(a){return a.status==='contratado'}).sort(function(a,b){return (b.hiredAt||'')<(a.hiredAt||'')?-1:1})[0];
-    var h=$('#hired');
-    if(hired){
-      var upto=apps.filter(function(a){return a.sentAt<=hired.sentAt}).length;
-      h.hidden=false;h.textContent='Vaga conseguida na '+hired.company+': '+upto+' candidaturas enviadas em '+daysBetween(start,hired.hiredAt||todayStr())+' dias de busca.';
-    }else h.hidden=true;
+
+  function formatDate(text) {
+    const [year, month, day] = String(text || '').split('-');
+    return year && month && day ? `${day}/${month}/${year}` : '—';
   }
-  function renderChips(){
-    var html='<button class="chip" type="button" data-f="all" aria-pressed="'+(filter==='all')+'">Todas <small>'+apps.length+'</small></button>';
-    STATUSES.forEach(function(s){
-      var c=apps.filter(function(a){return a.status===s.k}).length;
-      if(!c&&filter!==s.k)return;
-      html+='<button class="chip" type="button" data-f="'+s.k+'" aria-pressed="'+(filter===s.k)+'">'+esc(s.l)+' <small>'+c+'</small></button>';
-    });
-    $('#chips').innerHTML=html;
+
+  function daysBetween(from, to) {
+    const start = parseDate(from);
+    const end = parseDate(to);
+    if (!start || !end) return 0;
+    const msPerDay = 24 * 60 * 60 * 1000;
+    return Math.max(0, Math.round((end - start) / msPerDay));
   }
-  function visible(){
-    var q=query.trim().toLowerCase();
-    return apps.filter(function(a){
-      if(filter!=='all'&&a.status!==filter)return false;
-      if(!q)return true;
-      return [a.company,a.role,a.cv,a.source].join(' ').toLowerCase().indexOf(q)>-1;
-    }).sort(function(a,b){
-      if((a.sentAt||'')!==(b.sentAt||''))return (b.sentAt||'')<(a.sentAt||'')?-1:1;
-      return (b.createdAt||0)-(a.createdAt||0);
-    });
-  }
-  function renderList(){
-    var el=$('#list');
-    if(!ready){el.innerHTML='';return}
-    if(!loaded){el.innerHTML='<div class="empty"><h2>Carregando suas candidaturas…</h2></div>';return}
-    if(!apps.length){
-      el.innerHTML='<div class="empty"><h2>Nenhuma candidatura registrada</h2><ol><li>Clique em “Nova candidatura” assim que enviar o CV para uma vaga.</li><li>Cole o link da vaga e informe qual arquivo de CV você mandou.</li><li>Se houver entrevista, anote as perguntas e o resultado na mesma ficha.</li></ol><button class="btn primary" type="button" data-act="new">+ Nova candidatura</button></div>';
-      return;
+
+  // Aceita link colado sem "https://" e descarta o que não for http(s).
+  function normalizeUrl(text) {
+    let value = String(text || '').trim();
+    if (!value) return '';
+    if (!/^https?:\/\//i.test(value)) value = 'https://' + value;
+    try {
+      const url = new URL(value);
+      return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+    } catch {
+      return '';
     }
-    var rows=visible();
-    if(!rows.length){el.innerHTML='<div class="empty"><h2>Nada encontrado com esse filtro</h2></div>';return}
-    var html='<div class="head" aria-hidden="true"><span>Empresa e cargo</span><span>Enviada</span><span>CV enviado</span><span>Status</span><span></span></div>';
-    rows.forEach(function(a){
-      var s=stat(a.status),u=safeUrl(a.url);
-      var opts=STATUSES.map(function(x){return '<option value="'+x.k+'"'+(x.k===a.status?' selected':'')+'>'+esc(x.l)+'</option>'}).join('');
-      html+='<div class="row" data-id="'+esc(a.id)+'">'
-        +'<div class="co"><b>'+esc(a.company||'Sem nome')+'</b><span>'+esc(a.role||'Cargo não informado')+'</span>'
-        +(u?'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(host(u))+' ↗</a>':'')
-        +(a.interviewNotes?'<span class="tag">notas de entrevista</span>':'')+'</div>'
-        +'<div class="date mono">'+fmt(a.sentAt)+'</div>'
-        +'<div class="cv mono">'+cvCell(a.cv)+'</div>'
-        +'<div class="stw"><select class="pill" style="--c:var('+s.c+')" data-status-for="'+esc(a.id)+'" aria-label="Status de '+esc(a.company)+'">'+opts+'</select></div>'
-        +'<button class="btn open" type="button" data-open="'+esc(a.id)+'">Abrir</button></div>';
-    });
-    el.innerHTML=html;
-  }
-  // Se o CV foi enviado pelo painel, o nome vira um link que abre o arquivo.
-  function cvCell(name){
-    if(!name)return '—';
-    if(cvFiles.indexOf(name)<0)return esc(name);
-    return '<a href="/cvs/'+encodeURIComponent(name)+'" target="_blank" rel="noopener">'+esc(name)+'</a>';
-  }
-  function renderCvList(){
-    var seen={},out=[];
-    cvFiles.concat(apps.map(function(a){return a.cv})).forEach(function(v){v=(v||'').trim();if(v&&!seen[v]){seen[v]=1;out.push(v)}});
-    $('#cvlist').innerHTML=out.map(function(v){return '<option value="'+esc(v)+'"></option>'}).join('');
   }
 
-  /* CV: escolher o arquivo no computador e guardar junto com os dados */
-  function uploadCv(file){
-    if(!file)return;
-    fetch('/api/cv?name='+encodeURIComponent(file.name),{method:'PUT',body:file})
-      .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json()})
-      .then(function(d){
-        if(cvFiles.indexOf(d.name)<0)cvFiles.push(d.name);
-        $('#f-cv').value=d.name;
-        renderCvList();
-        toast('CV adicionado: '+d.name);
-      })
-      .catch(function(){toast('Não foi possível enviar o arquivo. Use PDF, DOC, DOCX ou ODT de até 10 MB.')})
-      .then(function(){$('#cv-file').value=''});
+  function hostOf(url) {
+    try {
+      return new URL(url).hostname.replace(/^www\./, '');
+    } catch {
+      return 'link';
+    }
   }
 
-  /* Painel */
-  function fillStatusSelect(){$('#f-status').innerHTML=STATUSES.map(function(s){return '<option value="'+s.k+'">'+esc(s.l)+'</option>'}).join('')}
-  function lastCv(){var m=apps.slice().sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0)})[0];return (m&&m.cv)||''}
-  function openPanel(id){
-    editingId=id||null;delArmed=false;$('#del').textContent='Excluir';
-    var a=id?apps.filter(function(x){return x.id===id})[0]:null;
-    if(id&&!a)return;
-    $('#ptitle').textContent=a?(a.company||'Candidatura'):'Nova candidatura';
-    $('#f-company').value=a?a.company||'':'';
-    $('#f-role').value=a?a.role||'':'';
-    $('#f-url').value=a?a.url||'':'';
-    $('#f-sent').value=a?a.sentAt||todayStr():todayStr();
-    $('#f-source').value=a?a.source||'':'';
-    $('#f-cv').value=a?a.cv||'':lastCv();
-    $('#f-status').value=a?a.status||'enviada':'enviada';
-    $('#f-notes').value=a?a.notes||'':'';
-    $('#f-idate').value=a?a.interviewAt||'':'';
-    $('#f-istage').value=a?a.interviewStage||'':'';
-    $('#f-inotes').value=a?a.interviewNotes||'':'';
-    $('#del').hidden=!a;
-    $('#overlay').hidden=false;
-    setTimeout(function(){$('#f-company').focus()},30);
+  function findStatus(key) {
+    return STATUSES.find((status) => status.key === key) || STATUSES[0];
   }
-  function closePanel(){$('#overlay').hidden=true;editingId=null}
 
-  function submit(e){
-    e.preventDefault();
-    var company=$('#f-company').value.trim();
-    if(!company){$('#f-company').focus();return}
-    var prev=editingId?apps.filter(function(x){return x.id===editingId})[0]:null;
-    var status=$('#f-status').value;
-    var data={
-      company:company, role:$('#f-role').value.trim(), url:safeUrl($('#f-url').value), sentAt:$('#f-sent').value||todayStr(),
-      source:$('#f-source').value, cv:$('#f-cv').value.trim(), status:status, notes:$('#f-notes').value,
-      interviewAt:$('#f-idate').value, interviewStage:$('#f-istage').value, interviewNotes:$('#f-inotes').value,
-      createdAt:prev&&prev.createdAt?prev.createdAt:Date.now(), updatedAt:Date.now()
-    };
-    if(status==='contratado')data.hiredAt=(prev&&prev.hiredAt)||todayStr();
-    var id=editingId;
-    if(id){var idx=apps.findIndex(function(x){return x.id===id});data.id=id;if(idx>-1)apps[idx]=Object.assign({},apps[idx],data);}
-    else{data.id=newId();apps.push(data);}
-    $('#save').disabled=true;
-    persist().then(function(){toast('Candidatura salva.');closePanel()})
-      .catch(function(){toast('Não foi possível salvar. O servidor (node server.js) está rodando?')})
-      .then(function(){$('#save').disabled=false;render()});
+  function findApp(id) {
+    return apps.find((app) => app.id === id);
   }
-  function changeStatus(id,k){
-    var a=apps.filter(function(x){return x.id===id})[0];if(!a||a.status===k)return;
-    a.status=k;a.updatedAt=Date.now();
-    if(k==='contratado'&&!a.hiredAt)a.hiredAt=todayStr();
-    render();
-    persist().catch(function(){toast('Não foi possível salvar o status.')});
+
+  function showToast(message) {
+    const toast = $('#toast');
+    toast.textContent = message;
+    toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => (toast.hidden = true), TOAST_MS);
   }
-  function removeApp(){
-    if(!editingId)return;
-    if(!delArmed){delArmed=true;$('#del').textContent='Confirmar exclusão';clearTimeout(delTimer);delTimer=setTimeout(function(){delArmed=false;$('#del').textContent='Excluir'},4000);return}
-    var id=editingId;
-    apps=apps.filter(function(x){return x.id!==id});
-    render();closePanel();
-    persist().then(function(){toast('Candidatura excluída.')}).catch(function(){toast('Não foi possível salvar a exclusão.')});
+
+  /* ---------- Cálculos ---------- */
+
+  // Início da busca: a data escolhida; senão a primeira candidatura; senão hoje.
+  function searchStartDate() {
+    if (settings.startedAt) return settings.startedAt;
+    const sentDates = apps.map((app) => app.sentAt).filter(Boolean).sort();
+    return sentDates[0] || todayStr();
   }
-  function editStart(){
-    var st=$('#start');
-    st.innerHTML='<label for="sd" style="display:inline">Início da busca</label><input id="sd" type="date" value="'+esc(startDate())+'" style="width:auto;min-height:32px"><button type="button" id="sdok">salvar</button>';
+
+  function reachedInterview(app) {
+    return Boolean(app.interviewAt || app.interviewNotes || INTERVIEW_STATUSES.includes(app.status));
+  }
+
+  function countByStatus(statusKey) {
+    return apps.filter((app) => app.status === statusKey).length;
+  }
+
+  // Candidaturas que aparecem na lista, já filtradas, buscadas e ordenadas (mais recentes primeiro).
+  function visibleApps() {
+    const text = searchText.trim().toLowerCase();
+    return apps
+      .filter((app) => activeFilter === 'all' || app.status === activeFilter)
+      .filter((app) => !text || [app.company, app.role, app.cv, app.source].join(' ').toLowerCase().includes(text))
+      .sort(
+        (a, b) =>
+          (b.sentAt || '').localeCompare(a.sentAt || '') || (b.createdAt || 0) - (a.createdAt || 0),
+      );
+  }
+
+  /* ---------- Desenho da tela ---------- */
+
+  function render() {
+    renderStats();
+    renderChips();
+    renderList();
+    renderCvSuggestions();
+  }
+
+  function renderStats() {
+    const total = apps.length;
+    const start = searchStartDate();
+    const active = apps.filter((app) => ACTIVE_STATUSES.includes(app.status)).length;
+    const answered = apps.filter((app) => app.status !== 'enviada' && app.status !== 'semresposta').length;
+
+    $('#total').textContent = total;
+    $('#m-days').textContent = daysBetween(start, todayStr());
+    $('#m-active').textContent = active;
+    $('#m-int').textContent = apps.filter(reachedInterview).length;
+    $('#m-rate').textContent = `${total ? Math.round((answered / total) * 100) : 0}%`;
+    $('#sub').textContent = total ? `desde ${formatDate(start)}` : 'Registre a primeira para começar a contar';
+
+    const usedStatuses = STATUSES.map((status) => ({ ...status, count: countByStatus(status.key) })).filter(
+      (status) => status.count > 0,
+    );
+    $('#bar').hidden = !total;
+    $('#bar').innerHTML = usedStatuses
+      .map(
+        (s) => `<i style="--c:var(${s.color});flex:${s.count}" title="${escapeHtml(s.label)}: ${s.count}"></i>`,
+      )
+      .join('');
+    $('#legend').innerHTML = usedStatuses
+      .map((s) => `<span style="--c:var(${s.color})">${escapeHtml(s.label)} <b class="mono">${s.count}</b></span>`)
+      .join('');
+
+    showStartDate(start);
+    renderHiredBanner(start);
+  }
+
+  function showStartDate(start) {
+    $('#start').innerHTML =
+      `<span>Início da busca: <b class="mono">${formatDate(start)}</b></span>` +
+      `<button type="button" id="chg">alterar</button>`;
+  }
+
+  function showStartEditor() {
+    $('#start').innerHTML =
+      `<label for="sd" style="display:inline">Início da busca</label>` +
+      `<input id="sd" type="date" value="${escapeHtml(searchStartDate())}" style="width:auto;min-height:32px">` +
+      `<button type="button" id="sdok">salvar</button>`;
     $('#sd').focus();
   }
-  function saveStart(){
-    var v=$('#sd').value;if(!v){renderStats();return}
-    settings.startedAt=v;renderStats();
-    persist().catch(function(){toast('Não foi possível salvar a data.')});
-  }
-  function exportCsv(){
-    var cols=[['company','Empresa'],['role','Cargo'],['url','Link'],['sentAt','Enviada em'],['source','Origem'],['cv','CV enviado'],['status','Status'],['notes','Observações'],['interviewAt','Data da entrevista'],['interviewStage','Etapa'],['interviewNotes','Obs. da entrevista']];
-    function q(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'}
-    var rows=[cols.map(function(c){return q(c[1])}).join(';')];
-    visibleAll().forEach(function(a){rows.push(cols.map(function(c){return q(c[0]==='status'?stat(a.status).l:a[c[0]])}).join(';'))});
-    var blob=new Blob(['\ufeff'+rows.join('\r\n')],{type:'text/csv;charset=utf-8'});
-    var l=document.createElement('a');l.href=URL.createObjectURL(blob);l.download='candidaturas.csv';document.body.appendChild(l);l.click();l.remove();
-  }
-  function visibleAll(){return apps.slice().sort(function(a,b){return (a.sentAt||'')<(b.sentAt||'')?-1:1})}
 
-  /* Eventos */
-  $('#csv').addEventListener('click',exportCsv);
-  $('#cv-browse').addEventListener('click',function(){$('#cv-file').click()});
-  $('#cv-file').addEventListener('change',function(e){uploadCv(e.target.files[0])});
-  $('#new').addEventListener('click',function(){openPanel(null)});
-  $('#close').addEventListener('click',closePanel);
-  $('#cancel').addEventListener('click',closePanel);
-  $('#scrim').addEventListener('click',closePanel);
-  $('#form').addEventListener('submit',submit);
-  $('#del').addEventListener('click',removeApp);
-  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!$('#overlay').hidden)closePanel()});
-  $('#q').addEventListener('input',function(e){query=e.target.value;renderList()});
-  $('#chips').addEventListener('click',function(e){var b=e.target.closest('[data-f]');if(!b)return;filter=b.getAttribute('data-f');renderChips();renderList()});
-  $('#start').addEventListener('click',function(e){
-    if(e.target.id==='chg')editStart();
-    else if(e.target.id==='sdok')saveStart();
-  });
-  $('#list').addEventListener('change',function(e){var s=e.target.closest('[data-status-for]');if(s)changeStatus(s.getAttribute('data-status-for'),s.value)});
-  $('#list').addEventListener('click',function(e){
-    if(e.target.closest('select')||e.target.closest('a'))return;
-    var n=e.target.closest('[data-act="new"]');if(n){openPanel(null);return}
-    var r=e.target.closest('[data-id]');if(r)openPanel(r.getAttribute('data-id'));
-  });
+  // Mostra quantas candidaturas foram enviadas, e em quantos dias, até a vaga conseguida mais recente.
+  function renderHiredBanner(start) {
+    const banner = $('#hired');
+    const hired = apps
+      .filter((app) => app.status === 'contratado')
+      .sort((a, b) => (b.hiredAt || '').localeCompare(a.hiredAt || ''))[0];
 
-  /* Armazenamento: arquivo data.json ao lado do server.js */
-  fillStatusSelect();render();
-  fetch('/api/cvs').then(function(r){return r.ok?r.json():[]}).catch(function(){return []}).then(function(list){cvFiles=list;render()});
-  fetch('/api/data').then(function(r){if(!r.ok)throw new Error();return r.json()}).then(function(d){
-    apps=Array.isArray(d.apps)?d.apps:[];settings=d.settings||{};loaded=true;render();
-  }).catch(function(){
-    var n=$('#notice');n.className='notice';n.hidden=false;
-    n.textContent='Não consegui ler os dados. Abra pelo endereço do servidor (http://localhost:3000) com o comando: node server.js';
-    $('#new').disabled=true;loaded=true;render();
-  });
+    banner.hidden = !hired;
+    if (!hired) return;
+
+    const sentUntilThen = apps.filter((app) => app.sentAt <= hired.sentAt).length;
+    const days = daysBetween(start, hired.hiredAt || todayStr());
+    banner.textContent = `Vaga conseguida na ${hired.company}: ${sentUntilThen} candidaturas enviadas em ${days} dias de busca.`;
+  }
+
+  function renderChips() {
+    const chip = (key, label, count) =>
+      `<button class="chip" type="button" data-f="${key}" aria-pressed="${activeFilter === key}">` +
+      `${escapeHtml(label)} <small>${count}</small></button>`;
+
+    const statusChips = STATUSES.map((status) => ({ ...status, count: countByStatus(status.key) }))
+      .filter((status) => status.count > 0 || status.key === activeFilter)
+      .map((status) => chip(status.key, status.label, status.count));
+
+    $('#chips').innerHTML = [chip('all', 'Todas', apps.length), ...statusChips].join('');
+  }
+
+  function renderList() {
+    const list = $('#list');
+
+    if (!isLoaded) {
+      list.innerHTML = '<div class="empty"><h2>Carregando suas candidaturas…</h2></div>';
+      return;
+    }
+    if (!apps.length) {
+      list.innerHTML = emptyStateHtml();
+      return;
+    }
+
+    const rows = visibleApps();
+    if (!rows.length) {
+      list.innerHTML = '<div class="empty"><h2>Nada encontrado com esse filtro</h2></div>';
+      return;
+    }
+
+    list.innerHTML =
+      '<div class="head" aria-hidden="true"><span>Empresa e cargo</span><span>Enviada</span>' +
+      '<span>CV enviado</span><span>Status</span><span></span></div>' +
+      rows.map(rowHtml).join('');
+  }
+
+  function emptyStateHtml() {
+    return `
+      <div class="empty">
+        <h2>Nenhuma candidatura registrada</h2>
+        <ol>
+          <li>Clique em “Nova candidatura” assim que enviar o CV para uma vaga.</li>
+          <li>Cole o link da vaga e informe qual arquivo de CV você mandou.</li>
+          <li>Se houver entrevista, anote as perguntas e o resultado na mesma ficha.</li>
+        </ol>
+        <button class="btn primary" type="button" data-act="new">+ Nova candidatura</button>
+      </div>`;
+  }
+
+  function rowHtml(app) {
+    const status = findStatus(app.status);
+    const link = normalizeUrl(app.url);
+    const options = STATUSES.map(
+      (s) => `<option value="${s.key}"${s.key === app.status ? ' selected' : ''}>${escapeHtml(s.label)}</option>`,
+    ).join('');
+
+    const linkHtml = link
+      ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${escapeHtml(hostOf(link))} ↗</a>`
+      : '';
+    const notesTag = app.interviewNotes ? '<span class="tag">notas de entrevista</span>' : '';
+
+    // Sem espaços entre os elementos de .co: o recuo vem do CSS, não de espaço em branco.
+    return `
+      <div class="row" data-id="${escapeHtml(app.id)}">
+        <div class="co"><b>${escapeHtml(app.company || 'Sem nome')}</b><span>${escapeHtml(app.role || 'Cargo não informado')}</span>${linkHtml}${notesTag}</div>
+        <div class="date mono">${formatDate(app.sentAt)}</div>
+        <div class="cv mono">${cvCellHtml(app.cv)}</div>
+        <div class="stw"><select class="pill" style="--c:var(${status.color})" data-status-for="${escapeHtml(app.id)}" aria-label="Status de ${escapeHtml(app.company)}">${options}</select></div>
+        <button class="btn open" type="button" data-open="${escapeHtml(app.id)}">Abrir</button>
+      </div>`;
+  }
+
+  // Se o CV foi enviado pelo painel, o nome vira um link que abre o arquivo.
+  function cvCellHtml(name) {
+    if (!name) return '—';
+    if (!cvFiles.includes(name)) return escapeHtml(name);
+    return `<a href="/cvs/${encodeURIComponent(name)}" target="_blank" rel="noopener">${escapeHtml(name)}</a>`;
+  }
+
+  // Sugestões do campo "CV enviado": os arquivos da pasta cvs/ e tudo que já foi usado.
+  function renderCvSuggestions() {
+    const names = new Set([...cvFiles, ...apps.map((app) => (app.cv || '').trim())]);
+    names.delete('');
+    $('#cvlist').innerHTML = [...names].map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
+  }
+
+  /* ---------- Salvar no servidor ---------- */
+
+  // Gravações entram numa fila para nunca se atropelarem.
+  function persist() {
+    saveQueue = saveQueue
+      .catch(() => {})
+      .then(async () => {
+        const response = await fetch('/api/data', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apps, settings }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      });
+    return saveQueue;
+  }
+
+  async function uploadCv(file) {
+    if (!file) return;
+    try {
+      const response = await fetch(`/api/cv?name=${encodeURIComponent(file.name)}`, { method: 'PUT', body: file });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const { name } = await response.json();
+
+      if (!cvFiles.includes(name)) cvFiles.push(name);
+      $('#f-cv').value = name;
+      renderCvSuggestions();
+      showToast(`CV adicionado: ${name}`);
+    } catch {
+      showToast('Não foi possível enviar o arquivo. Use PDF, DOC, DOCX ou ODT de até 10 MB.');
+    } finally {
+      $('#cv-file').value = '';
+    }
+  }
+
+  /* ---------- Painel lateral (criar, editar, excluir) ---------- */
+
+  function fillStatusOptions() {
+    $('#f-status').innerHTML = STATUSES.map((s) => `<option value="${s.key}">${escapeHtml(s.label)}</option>`).join('');
+  }
+
+  function lastUsedCv() {
+    const latest = [...apps].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+    return latest?.cv || '';
+  }
+
+  function resetDeleteButton() {
+    deleteArmed = false;
+    clearTimeout(deleteTimer);
+    $('#del').textContent = 'Excluir';
+  }
+
+  function openPanel(id) {
+    const app = id ? findApp(id) : null;
+    if (id && !app) return;
+
+    editingId = id || null;
+    resetDeleteButton();
+
+    $('#ptitle').textContent = app ? app.company || 'Candidatura' : 'Nova candidatura';
+    fillForm(app);
+    $('#del').hidden = !app;
+    $('#overlay').hidden = false;
+    setTimeout(() => $('#f-company').focus(), 30);
+  }
+
+  function closePanel() {
+    $('#overlay').hidden = true;
+    editingId = null;
+  }
+
+  function fillForm(app) {
+    const values = app || { sentAt: todayStr(), cv: lastUsedCv(), status: 'enviada' };
+    for (const [field, selector] of Object.entries(FORM_FIELDS)) {
+      $(selector).value = values[field] || '';
+    }
+    if (app && !app.sentAt) $(FORM_FIELDS.sentAt).value = todayStr();
+    if (app && !app.status) $(FORM_FIELDS.status).value = 'enviada';
+  }
+
+  function readForm() {
+    const form = {};
+    for (const [field, selector] of Object.entries(FORM_FIELDS)) {
+      form[field] = $(selector).value;
+    }
+    return {
+      ...form,
+      company: form.company.trim(),
+      role: form.role.trim(),
+      cv: form.cv.trim(),
+      url: normalizeUrl(form.url),
+      sentAt: form.sentAt || todayStr(),
+    };
+  }
+
+  /* ---------- Ações ---------- */
+
+  async function submitForm(event) {
+    event.preventDefault();
+    const fields = readForm();
+    if (!fields.company) return $('#f-company').focus();
+
+    const previous = editingId ? findApp(editingId) : null;
+    const application = {
+      ...fields,
+      createdAt: previous?.createdAt || Date.now(),
+      updatedAt: Date.now(),
+    };
+    if (fields.status === 'contratado') application.hiredAt = previous?.hiredAt || todayStr();
+
+    if (previous) {
+      const index = apps.indexOf(previous);
+      apps[index] = { ...previous, ...application, id: previous.id };
+    } else {
+      apps.push({ ...application, id: newId() });
+    }
+
+    $('#save').disabled = true;
+    try {
+      await persist();
+      showToast('Candidatura salva.');
+      closePanel();
+    } catch {
+      showToast('Não foi possível salvar. O servidor (node server.js) está rodando?');
+    } finally {
+      $('#save').disabled = false;
+      render();
+    }
+  }
+
+  function changeStatus(id, statusKey) {
+    const app = findApp(id);
+    if (!app || app.status === statusKey) return;
+
+    app.status = statusKey;
+    app.updatedAt = Date.now();
+    if (statusKey === 'contratado' && !app.hiredAt) app.hiredAt = todayStr();
+
+    render();
+    persist().catch(() => showToast('Não foi possível salvar o status.'));
+  }
+
+  // O botão excluir pede confirmação: o primeiro clique arma, o segundo exclui.
+  function deleteApplication() {
+    if (!editingId) return;
+
+    if (!deleteArmed) {
+      deleteArmed = true;
+      $('#del').textContent = 'Confirmar exclusão';
+      clearTimeout(deleteTimer);
+      deleteTimer = setTimeout(resetDeleteButton, CONFIRM_DELETE_MS);
+      return;
+    }
+
+    const id = editingId;
+    apps = apps.filter((app) => app.id !== id);
+    render();
+    closePanel();
+    persist()
+      .then(() => showToast('Candidatura excluída.'))
+      .catch(() => showToast('Não foi possível salvar a exclusão.'));
+  }
+
+  function saveStartDate() {
+    const value = $('#sd').value;
+    if (!value) return renderStats();
+
+    settings.startedAt = value;
+    renderStats();
+    persist().catch(() => showToast('Não foi possível salvar a data.'));
+  }
+
+  function exportCsv() {
+    const quote = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const header = CSV_COLUMNS.map(([, title]) => quote(title)).join(';');
+    const rows = [...apps]
+      .sort((a, b) => (a.sentAt || '').localeCompare(b.sentAt || ''))
+      .map((app) =>
+        CSV_COLUMNS.map(([field]) => quote(field === 'status' ? findStatus(app.status).label : app[field])).join(';'),
+      );
+
+    // O ﻿ no começo faz o Excel reconhecer os acentos.
+    const blob = new Blob(['﻿' + [header, ...rows].join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'candidaturas.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  /* ---------- Eventos ---------- */
+
+  function bindEvents() {
+    $('#csv').addEventListener('click', exportCsv);
+    $('#cv-browse').addEventListener('click', () => $('#cv-file').click());
+    $('#cv-file').addEventListener('change', (event) => uploadCv(event.target.files[0]));
+
+    $('#new').addEventListener('click', () => openPanel(null));
+    $('#close').addEventListener('click', closePanel);
+    $('#cancel').addEventListener('click', closePanel);
+    $('#scrim').addEventListener('click', closePanel);
+    $('#form').addEventListener('submit', submitForm);
+    $('#del').addEventListener('click', deleteApplication);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !$('#overlay').hidden) closePanel();
+    });
+
+    $('#q').addEventListener('input', (event) => {
+      searchText = event.target.value;
+      renderList();
+    });
+
+    $('#chips').addEventListener('click', (event) => {
+      const chip = event.target.closest('[data-f]');
+      if (!chip) return;
+      activeFilter = chip.dataset.f;
+      renderChips();
+      renderList();
+    });
+
+    $('#start').addEventListener('click', (event) => {
+      if (event.target.id === 'chg') showStartEditor();
+      else if (event.target.id === 'sdok') saveStartDate();
+    });
+
+    $('#list').addEventListener('change', (event) => {
+      const select = event.target.closest('[data-status-for]');
+      if (select) changeStatus(select.dataset.statusFor, select.value);
+    });
+
+    $('#list').addEventListener('click', (event) => {
+      if (event.target.closest('select, a')) return; // não abre a ficha ao mudar o status ou clicar em link
+      if (event.target.closest('[data-act="new"]')) return openPanel(null);
+      const row = event.target.closest('[data-id]');
+      if (row) openPanel(row.dataset.id);
+    });
+  }
+
+  /* ---------- Início ---------- */
+
+  async function loadCvFiles() {
+    try {
+      const response = await fetch('/api/cvs');
+      cvFiles = response.ok ? await response.json() : [];
+    } catch {
+      cvFiles = [];
+    }
+    render();
+  }
+
+  async function loadData() {
+    try {
+      const response = await fetch('/api/data');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      apps = Array.isArray(data.apps) ? data.apps : [];
+      settings = data.settings || {};
+    } catch {
+      const notice = $('#notice');
+      notice.className = 'notice';
+      notice.hidden = false;
+      notice.textContent =
+        'Não consegui ler os dados. Abra pelo endereço do servidor (http://localhost:3000) com o comando: node server.js';
+      $('#new').disabled = true;
+    }
+    isLoaded = true;
+    render();
+  }
+
+  fillStatusOptions();
+  bindEvents();
+  render();
+  loadCvFiles();
+  loadData();
 })();

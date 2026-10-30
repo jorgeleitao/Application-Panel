@@ -1,16 +1,21 @@
 // Servidor local sem dependências.
 // Uso: node server.js  (abre em http://localhost:3000)
+//
+// Guarda as candidaturas em data.json e os CVs escolhidos no painel na pasta cvs/.
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+/* ---------- Configuração ---------- */
+
 const PORT = process.env.PORT || 3000;
 const HOST = '127.0.0.1'; // só aceita conexões da própria máquina
-const MAX_BODY_BYTES = 5e6;
 
 const DATA_FILE = path.join(__dirname, 'data.json');
-const CV_DIR = path.join(__dirname, 'cvs'); // CVs escolhidos no painel ficam aqui
+const CV_DIR = path.join(__dirname, 'cvs');
+
+const MAX_DATA_BYTES = 5e6;
 const MAX_CV_BYTES = 10 * 1024 * 1024;
 
 // Tipos de CV aceitos (extensão -> tipo de conteúdo ao abrir no navegador).
@@ -22,23 +27,62 @@ const CV_TYPES = {
 };
 
 // Únicos arquivos que o navegador pode baixar (evita expor outras coisas da pasta).
+const HTML = { file: 'index.html', type: 'text/html; charset=utf-8' };
 const STATIC_FILES = {
-  '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
-  '/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
+  '/': HTML,
+  '/index.html': HTML,
   '/styles.css': { file: 'styles.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
 };
 
-/* ---------- Dados ---------- */
+/* ---------- Respostas ---------- */
+
+function sendText(res, status, text) {
+  res.writeHead(status);
+  res.end(text);
+}
+
+function sendJson(res, payload) {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(payload));
+}
+
+function sendFile(res, filePath, type) {
+  try {
+    const content = fs.readFileSync(filePath);
+    res.writeHead(200, { 'Content-Type': type });
+    res.end(content);
+  } catch {
+    sendText(res, 404, 'not found');
+  }
+}
+
+// Lê o corpo da requisição. Devolve null se passar do limite (o excedente é descartado, não guardado).
+function readBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size <= maxBytes) chunks.push(chunk);
+    });
+    req.on('end', () => resolve(size <= maxBytes ? Buffer.concat(chunks) : null));
+    req.on('error', reject);
+  });
+}
+
+/* ---------- Dados (data.json) ---------- */
 
 function readData() {
   try {
     return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch (err) {
+  } catch {
     return { apps: [], settings: {} }; // primeira execução ou arquivo ilegível
   }
 }
 
+// Grava num arquivo temporário e troca no final, para nunca deixar o data.json pela metade.
 function writeData(data) {
   const tempFile = DATA_FILE + '.tmp';
   fs.writeFileSync(tempFile, JSON.stringify(data, null, 2));
@@ -49,11 +93,28 @@ function writeData(data) {
   fs.renameSync(tempFile, DATA_FILE);
 }
 
-/* ---------- CVs ---------- */
+async function handleSaveData(req, res) {
+  const body = await readBody(req, MAX_DATA_BYTES);
+  if (!body) return sendText(res, 413, 'payload too large');
+
+  try {
+    const incoming = JSON.parse(body.toString('utf8'));
+    if (!Array.isArray(incoming.apps)) throw new Error('formato inválido');
+
+    writeData({ apps: incoming.apps, settings: incoming.settings || {} });
+    res.writeHead(204);
+    res.end();
+  } catch {
+    sendText(res, 400, 'bad request');
+  }
+}
+
+/* ---------- CVs (pasta cvs/) ---------- */
 
 // Devolve um nome de arquivo seguro (sem pastas, sem caracteres estranhos) ou null se o tipo não for aceito.
 function safeCvName(rawName) {
-  const name = path.basename(String(rawName || ''))
+  const name = path
+    .basename(String(rawName || ''))
     .replace(/[^\p{L}\p{N}._() -]/gu, '_')
     .trim();
 
@@ -63,111 +124,74 @@ function safeCvName(rawName) {
 function listCvs() {
   try {
     return fs.readdirSync(CV_DIR).filter((name) => safeCvName(name) === name).sort();
-  } catch (err) {
+  } catch {
     return []; // a pasta só é criada no primeiro envio
   }
 }
 
-/* ---------- Respostas ---------- */
-
-function sendStaticFile(res, { file, type }) {
-  res.writeHead(200, { 'Content-Type': type });
-  res.end(fs.readFileSync(path.join(__dirname, file)));
-}
-
-function sendJson(res, payload) {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(payload));
-}
-
-function handleSaveData(req, res) {
-  let body = '';
-
-  req.on('data', (chunk) => {
-    body += chunk;
-    if (body.length > MAX_BODY_BYTES) req.destroy();
-  });
-
-  req.on('end', () => {
-    try {
-      const incoming = JSON.parse(body);
-      if (!Array.isArray(incoming.apps)) throw new Error('formato inválido');
-
-      writeData({ apps: incoming.apps, settings: incoming.settings || {} });
-      res.writeHead(204);
-      res.end();
-    } catch (err) {
-      res.writeHead(400);
-      res.end('bad request');
-    }
-  });
-}
-
 // Recebe o arquivo escolhido no painel e guarda em cvs/. Reenviar o mesmo nome substitui o arquivo.
-function handleUploadCv(req, res) {
+async function handleUploadCv(req, res) {
   const name = safeCvName(new URL(req.url, 'http://localhost').searchParams.get('name'));
-  const chunks = [];
-  let size = 0;
+  const body = await readBody(req, MAX_CV_BYTES);
 
-  req.on('data', (chunk) => {
-    size += chunk.length;
-    if (size <= MAX_CV_BYTES) chunks.push(chunk);
-  });
+  if (!name) return sendText(res, 415, 'tipo de arquivo não aceito');
+  if (!body) return sendText(res, 413, 'arquivo muito grande');
 
-  req.on('end', () => {
-    if (!name) {
-      res.writeHead(415);
-      return res.end('tipo de arquivo não aceito');
-    }
-    if (size > MAX_CV_BYTES) {
-      res.writeHead(413);
-      return res.end('arquivo muito grande');
-    }
-
-    try {
-      fs.mkdirSync(CV_DIR, { recursive: true });
-      fs.writeFileSync(path.join(CV_DIR, name), Buffer.concat(chunks));
-      sendJson(res, { name });
-    } catch (err) {
-      res.writeHead(500);
-      res.end('erro ao salvar');
-    }
-  });
+  try {
+    fs.mkdirSync(CV_DIR, { recursive: true });
+    fs.writeFileSync(path.join(CV_DIR, name), body);
+    sendJson(res, { name });
+  } catch {
+    sendText(res, 500, 'erro ao salvar');
+  }
 }
 
 // Abre um CV já enviado: GET /cvs/<nome>
-function sendCvFile(res, url) {
+function handleOpenCv(res, url) {
   let name;
   try {
     name = decodeURIComponent(url.slice('/cvs/'.length));
-  } catch (err) {
-    name = null;
+  } catch {
+    return sendText(res, 404, 'not found');
   }
 
-  const filePath = name && safeCvName(name) === name ? path.join(CV_DIR, name) : null;
-  if (!filePath || !fs.existsSync(filePath)) {
-    res.writeHead(404);
-    return res.end('not found');
-  }
-
-  res.writeHead(200, { 'Content-Type': CV_TYPES[path.extname(name).toLowerCase()] });
-  res.end(fs.readFileSync(filePath));
+  if (safeCvName(name) !== name) return sendText(res, 404, 'not found');
+  sendFile(res, path.join(CV_DIR, name), CV_TYPES[path.extname(name).toLowerCase()]);
 }
 
 /* ---------- Rotas ---------- */
 
-const server = http.createServer((req, res) => {
+async function handleRequest(req, res) {
   const url = req.url.split('?')[0];
+  const isGet = req.method === 'GET';
+  const isPut = req.method === 'PUT';
 
-  if (STATIC_FILES[url]) return sendStaticFile(res, STATIC_FILES[url]);
-  if (url === '/api/data' && req.method === 'GET') return sendJson(res, readData());
-  if (url === '/api/data' && req.method === 'PUT') return handleSaveData(req, res);
-  if (url === '/api/cvs' && req.method === 'GET') return sendJson(res, listCvs());
-  if (url === '/api/cv' && req.method === 'PUT') return handleUploadCv(req, res);
-  if (url.startsWith('/cvs/') && req.method === 'GET') return sendCvFile(res, url);
+  const staticFile = STATIC_FILES[url];
+  if (staticFile) return sendFile(res, path.join(__dirname, staticFile.file), staticFile.type);
 
-  res.writeHead(404);
-  res.end('not found');
+  if (url === '/api/data' && isGet) return sendJson(res, readData());
+  if (url === '/api/data' && isPut) return handleSaveData(req, res);
+  if (url === '/api/cvs' && isGet) return sendJson(res, listCvs());
+  if (url === '/api/cv' && isPut) return handleUploadCv(req, res);
+  if (url.startsWith('/cvs/') && isGet) return handleOpenCv(res, url);
+
+  sendText(res, 404, 'not found');
+}
+
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch(() => {
+    if (!res.headersSent) sendText(res, 500, 'erro interno');
+    else res.end();
+  });
+});
+
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`A porta ${PORT} já está em uso. Feche o painel que já está aberto ou use outra: PORT=4000 node server.js`);
+  } else {
+    console.error(error);
+  }
+  process.exit(1);
 });
 
 server.listen(PORT, HOST, () => {
